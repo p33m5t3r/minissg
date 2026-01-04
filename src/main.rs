@@ -12,20 +12,14 @@ TODO:
 [x] block quotes
 [x] basic (inline) footnotes
 [x] fix titles
-[ ] unordered lists
-[ ] ordered lists
+[x] unordered lists
+[x] ordered lists
 [ ] clean up
 [ ] compile all
 */
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use regex::Regex;
-
-struct CompilerConfig {
-    images_dir: PathBuf,
-    post_template: String,
-    math_template: String,
-}
 
 #[derive(Debug, PartialEq, Clone)]
 enum TextFormat {
@@ -46,15 +40,29 @@ struct Text {
 }
 
 #[derive(Debug)]
+struct ListItem {
+    // marker: String,
+    level: usize,
+    content: Vec<Text>,
+}
+
+#[derive(Debug)]
 enum Block {
     Paragraph(Vec<Text>),
-    Header(usize, String),  // level, source
+    Header(usize, String),       // level, source
     Code(String, String),        // standalone code block
     Math(String),
-    Image(String, String, u32), // alt, url, width percentage 
+    Image(String, String, u32),  // alt, url, width percentage 
     Html(String),
     Quote(String),
-    Footnote(String, Vec<Text>)   // id, text
+    Footnote(String, Vec<Text>), // id, text
+    List(bool, Vec<ListItem>),   // true = ordered, false = unordered
+}
+
+struct CompilerConfig {
+    images_dir: PathBuf,
+    post_template: String,
+    math_template: String,
 }
 
 impl Text {
@@ -145,6 +153,50 @@ impl Block {
                     "<p id=\"fn{}\"><a href=\"#ref{}\">[{}]</a> {}</p>",
                     id, id, id, c
                 )
+            }
+            Block::List(is_ordered, list) => {
+                let mut s = String::new();
+                let mut current_level = 0;
+                let tag = if *is_ordered { "ol" } else { "ul" };
+                
+                // Start first list
+                s.push_str(&format!("<{}>", tag));
+                
+                for (i, item) in list.iter().enumerate() {
+                    let inner_text = item.content.iter().map(|t| t.render(cfg)).collect::<String>();
+                    
+                    // Handle level changes
+                    if item.level > current_level {
+                        // Open nested lists (don't close the previous <li> yet)
+                        for _ in current_level..item.level {
+                            s.push_str(&format!("<{}>", tag));
+                        }
+                    } else if item.level < current_level {
+                        // Close nested lists and previous <li>
+                        s.push_str("</li>");
+                        for _ in item.level..current_level {
+                            s.push_str(&format!("</{}>", tag));
+                            s.push_str("</li>");
+                        }
+                    } else if i > 0 {
+                        // Same level, close previous <li>
+                        s.push_str("</li>");
+                    }
+                    
+                    // Add current item
+                    s.push_str(&format!("<li>{}", inner_text));
+                    current_level = item.level;
+                }
+                
+                // Close remaining tags
+                s.push_str("</li>");
+                for _ in 0..current_level {
+                    s.push_str(&format!("</{}>", tag));
+                    s.push_str("</li>");
+                }
+                s.push_str(&format!("</{}>", tag));
+                
+                s
             }
         }
     }
@@ -262,6 +314,40 @@ fn parse_blocks(input: String) -> Vec<Block> {
             }
         }
 
+        // ordered lists 
+        else if let Some(li0) = captures_ol_li(line) {
+            let mut items = vec![li0];
+            while let Some(line) = lines.next() {
+                if let Some(item) = captures_ol_li(line) {
+                    items.push(item);
+                } else if let Some(item) = captures_ul_li(line) {
+                    items.push(item);
+                } else {
+                    break;
+                }
+            }
+            blocks.push(
+                Block::List(true, items)
+            );
+        }
+
+        // unordered lists
+        else if let Some(li0) = captures_ul_li(line) {
+            let mut items = vec![li0];
+            while let Some(line) = lines.next() {
+                if let Some(item) = captures_ul_li(line) {
+                    items.push(item);
+                } else if let Some(item) = captures_ol_li(line) {
+                    items.push(item);
+                } else {
+                    break;
+                }
+            }
+            blocks.push(
+                Block::List(false, items)
+            );
+        }
+
         // paragraph
         else {
             text_buf.push_str(line);
@@ -278,10 +364,32 @@ fn parse_blocks(input: String) -> Vec<Block> {
     blocks
 }
 
+fn captures_ol_li(line: &str) -> Option<ListItem> {
+    let r = Regex::new(r"^( *)([^\s.]+)\.\s+(.*)").unwrap();
+    if let Some(caps) = r.captures(line) {
+        let level = caps[1].len() / 4;  // spaces divided by 4
+        let content = parse_text(caps[3].to_string());
+        Some(ListItem{level, content})
+    } else {
+        None
+    }
+}
+
+fn captures_ul_li(line: &str) -> Option<ListItem> {
+    let r = Regex::new(r"^( *)[-*]\s+(.*)").unwrap();
+    if let Some(caps) = r.captures(line) {
+        let level = caps[1].len() / 4;  // spaces divided by 4
+        let content = parse_text(caps[2].to_string());
+        Some(ListItem{level, content})
+    } else {
+        None
+    }
+}
+
+
 // also responsible for postprocessing links/footnotes
 fn push_fmted_text( s_buf: &mut String, texts: &mut Vec<Text>,
                     fmt_c: &mut TextFormat, fmt_new: TextFormat){
-    // println!("{}", s_buf);
     if s_buf.is_empty() { return };
     let link_regex = Regex::new(r"\[([^\]]+)\]\(([^)]+)\)").unwrap();
     let footnote_regex = Regex::new(r"\[\^(\d+)\]").unwrap();
@@ -425,7 +533,6 @@ fn compile_post(in_path: &Path,
 
     // parse
     let parsed = parse(file);
-    // println!("{:?}", parsed);
 
     // render contents
     let content = render_document(parsed, cfg);
@@ -454,7 +561,6 @@ fn render_math_to_svg(math: &str,
         else { format!("${}$", math) };
 
     let latex_content = cfg.math_template.clone().replace("{{content}}", &inner_contents);
-    // println!("{:?}", latex_content);
     std::fs::write(&tex_path, latex_content).unwrap();
     
     let latex_output = Command::new("latex")
@@ -476,7 +582,6 @@ fn render_math_to_svg(math: &str,
     println!("\tcompiling TeX expr: {}... OK", math.replace("\n", " "));
     let dvi_path = temp_dir.path().join("math.dvi");
     
-    // Debug: check if DVI file exists
     if !dvi_path.exists() {
         return Err(format!("DVI file not found at {:?}", dvi_path));
     }
@@ -485,9 +590,6 @@ fn render_math_to_svg(math: &str,
         .args(&["--no-fonts", "--exact", "--stdout", dvi_path.to_str().unwrap()])
         .output()
         .unwrap();
-    
-    // println!("dvisvgm stderr: {}", String::from_utf8_lossy(&svg_output.stderr));
-    // println!("dvisvgm status: {}", svg_output.status);
     
     Ok(String::from_utf8_lossy(&svg_output.stdout).to_string())
 }

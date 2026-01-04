@@ -203,3 +203,18 @@ pre::-webkit-scrollbar-track {
     font-family: 'Courier New', monospace;
     font-size: 0.9em;
 }
+
+/* List styling */
+ol, ul {
+    padding-left: 2em;
+    font-size: 1.5rem;
+    line-height: 1.5;
+}
+
+ol ol {
+    list-style-type: lower-alpha;
+}
+
+ol ol ol {
+    list-style-type: lower-roman;
+}

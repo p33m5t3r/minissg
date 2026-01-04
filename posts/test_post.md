@@ -32,6 +32,19 @@ def bar(y):
 this is a comment you shouldnt see me
 -->
 
+1. ordered list item 1
+    1. sublist item 1
+        1. sub sub list item 1
+    2. sublist item 2
+2. and hey display still works! $\mathbb{R}$ and _fmt_ *etc*
+
+
+- ul li 1
+    - ul subli 1
+        - ul subsubli1
+    - ul subli 2
+- ul li 2 and the _same_ *is* true `here` $\mathbb{C}$
+
 raw html:
 <table>
     <tr>
