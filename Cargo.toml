@@ -1,0 +1,8 @@
+[package]
+name = "minissg"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+tempfile = "3"
+regex = "1.12.2"
