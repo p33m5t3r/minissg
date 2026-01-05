@@ -1,22 +1,3 @@
-/*
-TODO:
-[x] error handling on the latex compilation
-[x] latex template
-[x] block math
-[x] inline code
-[x] block code
-[x] links
-[x] images
-[x] comments
-[x] raw html
-[x] block quotes
-[x] basic (inline) footnotes
-[x] fix titles
-[x] unordered lists
-[x] ordered lists
-[ ] clean up
-[ ] compile all
-*/
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use regex::Regex;
@@ -60,150 +41,103 @@ enum Block {
 }
 
 struct CompilerConfig {
+    posts_dir: PathBuf,
     images_dir: PathBuf,
+    output_dir: PathBuf,
     post_template: String,
     math_template: String,
 }
 
-impl Text {
-    fn render(&self, cfg: &CompilerConfig) -> String {
-        match self.fmt {
-            TextFormat::Plain => {
-                String::clone(&self.src)
-            }
-            TextFormat::Bold => {
-                let s = String::clone(&self.src);
-                return format!("<span class=\"bold\"> {} </span>", s);
-            }
-            TextFormat::Italic => {
-                let s = String::clone(&self.src);
-                return format!("<span class=\"italic\"> {} </span>", s);
-            }
-            TextFormat::InlineMath => {
-                let svg = render_math_to_svg(&self.src, cfg, false).unwrap_or_else(
-                    |e| format!("<code class='latex-error'>{}</code>", e)
-                );
-                format!("<span class=\"inline-math\">{}</span>", svg)
-            }
-            TextFormat::InlineCode => {
-                format!(" <span class=\"inline-code\">{}</span>", &self.src)
-            }
-            TextFormat::Link(ref url) => {
-                format!("<a href=\"{}\">{}</a>", url, &self.src)
-            }
-            TextFormat::FootnoteRef => {
-                format!(
-                    "<sup id=\"ref{}\"><a href=\"#fn{}\">[{}]</a></sup>", 
-                    &self.src, &self.src, &self.src
-                )
-            }
-            _ => {
-                return String::clone(&self.src);
-            }
+
+fn main() {
+    let args: Vec<String> = std::env::args().collect();
+   
+    let posts_dir = Path::new("posts/").to_path_buf();  // markdown src
+    let images_dir = Path::new("/static/images").to_path_buf();
+    let output_dir = Path::new("www/posts").to_path_buf();
+    let post_template_path = Path::new("templates/template.html");
+    let math_template_path = Path::new("templates/math.tex");
+    let post_template = std::fs::read_to_string(post_template_path).unwrap();
+    let math_template = std::fs::read_to_string(math_template_path).unwrap();
+
+    let cfg = CompilerConfig {
+        posts_dir,
+        images_dir,
+        output_dir,
+        post_template,
+        math_template
+    };
+
+    if args.len() > 1 {
+        // Compile specific file
+        let input_path = Path::new(&args[1]);
+        let output_path = cfg.output_dir
+            .join(input_path.file_stem().unwrap())
+            .with_extension("html");
+        compile_post(input_path, &output_path, &cfg);
+    } else {
+        // Compile all
+        println!("compiling all posts...");
+        compile_all(&cfg);
+    }
+}
+/* ========================================
+                  compiling 
+   ======================================== */
+fn compile_all(cfg: &CompilerConfig) {
+    let entries = std::fs::read_dir(&cfg.posts_dir).unwrap();
+    for entry in entries {
+        let path = entry.unwrap().path();
+        if path.extension().and_then(|s| s.to_str()) == Some("md") {
+            let output_path = cfg.output_dir.join(path.file_stem().unwrap()).with_extension("html");
+            compile_post(&path, &output_path, &cfg);
         }
+
     }
 }
 
-fn tagged(s: String, tag: &'static str) -> String {
-    format!("<{0}>{1}</{0}>\n", tag, s)
-}
 
-impl Block {
-    fn render(&self, cfg: &CompilerConfig) -> String {
-        match self {
-            Block::Paragraph(chunks) => {
-                let c = chunks.iter().map(|text| text.render(cfg)).collect::<String>();
-                tagged(c, "p")
-            },
-            Block::Header(level, src) => {
-                let tag = if *level == 1 { "h1" } else {"h2"};
-                let mut s = tagged(String::clone(src), tag);
-                if tag == "h1" {
-                    s.push_str("<hr><br>")
-                }
-                s
-            }
-            Block::Math(s) => {
-                let svg = render_math_to_svg(s, cfg, false).unwrap_or_else(
-                    |e| format!("<code class='latex-error'>{}</code>", e)
-                );
-                format!("<span class=\"display-math\">{}</span>", svg)
-            }
-            Block::Code(lang, src) => {
-                format!("<pre><code class=\"code-{}\">{}</code></pre>", lang, src)
-            }
-            Block::Image(alt, url, width) => {
-                let full_path = cfg.images_dir.join(url);
-                let path_str = full_path.to_str().unwrap();
-                if *width == 100 {
-                    format!("<img src=\"{}\" alt=\"{}\" class=\"image\">", path_str, alt)
-                } else {
-                    format!("<img src=\"{}\" alt=\"{}\" class=\"image\" style=\"width: {}%;\">", path_str, alt, width)
-                }
-            }
-            Block::Html(src) => {
-                src.to_string()
-            }
-            Block::Quote(src) => {
-                format!("<p class=quote>{}</p>\n", src)
-            }
-            Block::Footnote(id, chunks) => {
-                let c = chunks.iter().map(|text| text.render(cfg)).collect::<String>();
-                format!(
-                    "<p id=\"fn{}\"><a href=\"#ref{}\">[{}]</a> {}</p>",
-                    id, id, id, c
-                )
-            }
-            Block::List(is_ordered, list) => {
-                let mut s = String::new();
-                let mut current_level = 0;
-                let tag = if *is_ordered { "ol" } else { "ul" };
-                
-                // Start first list
-                s.push_str(&format!("<{}>", tag));
-                
-                for (i, item) in list.iter().enumerate() {
-                    let inner_text = item.content.iter().map(|t| t.render(cfg)).collect::<String>();
-                    
-                    // Handle level changes
-                    if item.level > current_level {
-                        // Open nested lists (don't close the previous <li> yet)
-                        for _ in current_level..item.level {
-                            s.push_str(&format!("<{}>", tag));
-                        }
-                    } else if item.level < current_level {
-                        // Close nested lists and previous <li>
-                        s.push_str("</li>");
-                        for _ in item.level..current_level {
-                            s.push_str(&format!("</{}>", tag));
-                            s.push_str("</li>");
-                        }
-                    } else if i > 0 {
-                        // Same level, close previous <li>
-                        s.push_str("</li>");
-                    }
-                    
-                    // Add current item
-                    s.push_str(&format!("<li>{}", inner_text));
-                    current_level = item.level;
-                }
-                
-                // Close remaining tags
-                s.push_str("</li>");
-                for _ in 0..current_level {
-                    s.push_str(&format!("</{}>", tag));
-                    s.push_str("</li>");
-                }
-                s.push_str(&format!("</{}>", tag));
-                
-                s
-            }
-        }
+fn compile_post(in_path: &Path,
+                out_path: &Path,
+                cfg: &CompilerConfig,
+) {
+    println!("compiling: {} => {}", in_path.display(), out_path.display());
+
+    // read file
+    if let Ok(file) = std::fs::read_to_string(in_path){
+        // parse
+        let parsed = parse(file);
+
+        // render contents
+        let content = render_document(parsed, cfg);
+        let _ = parsed;
+
+        // paste contents into template
+        let title = in_path.file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("untitled");
+        let post_html = cfg.post_template.clone()
+            .replace("{{content}}", &content)
+            .replace("{{title}}", title);
+
+        // write output to file
+        let _ = std::fs::write(out_path, post_html);
+    } else {
+        println!("error; invalid file path: {}", in_path.display());
     }
 }
 
-fn render_document(blocks: Vec<Block>, cfg: &CompilerConfig) -> String {
-    blocks.iter().map(|block| block.render(cfg)).collect()
+
+/* ========================================
+                   parsing 
+   ======================================== */
+fn parse(input: String) -> Vec<Block> {
+    // parse blocks
+    let blocks = parse_blocks(input);
+
+    // postprocess text elements where needed
+    let content = blocks.into_iter().map(|b| parse_inner(b)).collect();
+    content
 }
 
 fn parse_blocks(input: String) -> Vec<Block> {
@@ -386,6 +320,73 @@ fn captures_ul_li(line: &str) -> Option<ListItem> {
     }
 }
 
+// some blocks need postprocessing
+fn parse_inner(block: Block) -> Block {
+    match block {
+        Block::Paragraph(ts) => {
+            // assume its raw in this pass
+            if let Some(raw_text) = ts.first() {
+                Block::Paragraph(parse_text(raw_text.src.clone()))
+            } else {
+                Block::Paragraph(ts)
+            }
+        },
+        Block::Footnote(id, ts) => {
+            if let Some(raw_text) = ts.first() {
+                Block::Footnote(id, parse_text(raw_text.src.clone()))
+            } else {
+                Block::Footnote(id, ts)
+            }
+        }
+        _ => block 
+    }
+}
+
+fn parse_text(src: String) -> Vec<Text> {
+    let chars = src.chars().peekable();
+    let mut s_buf = String::new();
+    let mut texts = Vec::new();
+    let mut escaped = false;
+    let mut fmt = TextFormat::Plain;
+    let mut in_literal_mode = false;
+
+    for c in chars {
+        if escaped {
+            s_buf.push(c);
+            escaped = false;
+            continue;
+        } if in_literal_mode { // todo deconflate
+            if c == '$' && fmt == TextFormat::InlineMath {
+                push_fmted_text(&mut s_buf, &mut texts, &mut fmt, TextFormat::Plain);
+                in_literal_mode = false;
+            } else if c == '`' && fmt == TextFormat::InlineCode {
+                push_fmted_text(&mut s_buf, &mut texts, &mut fmt, TextFormat::Plain);
+                in_literal_mode = false;
+            } else {
+                s_buf.push(c);
+            }
+            continue;
+        }
+        match c { 
+            '\\' => { escaped = true; }
+            '*' => { push_fmted_text(&mut s_buf, &mut texts, &mut fmt, TextFormat::Bold); }
+            '_' => { push_fmted_text(&mut s_buf, &mut texts, &mut fmt, TextFormat::Italic); }
+            '$' => {
+                push_fmted_text(&mut s_buf, &mut texts, &mut fmt, TextFormat::InlineMath);
+                in_literal_mode = !in_literal_mode;
+            }
+            '`' => {
+                push_fmted_text(&mut s_buf, &mut texts, &mut fmt, TextFormat::InlineCode);
+                in_literal_mode = !in_literal_mode;
+            }
+            _ => { s_buf.push(c); }
+        }
+    }
+    let f2 = fmt.clone();
+    push_fmted_text(&mut s_buf, &mut texts, &mut fmt, f2);
+    // texts.push(Text{src: s_buf, fmt: fmt.clone()});
+    texts
+}
 
 // also responsible for postprocessing links/footnotes
 fn push_fmted_text( s_buf: &mut String, texts: &mut Vec<Text>,
@@ -447,109 +448,146 @@ fn push_fmted_text( s_buf: &mut String, texts: &mut Vec<Text>,
     *s_buf = String::new();
 }
 
-fn parse_text(src: String) -> Vec<Text> {
-    let chars = src.chars().peekable();
-    let mut s_buf = String::new();
-    let mut texts = Vec::new();
-    let mut escaped = false;
-    let mut fmt = TextFormat::Plain;
-    let mut in_literal_mode = false;
 
-    for c in chars {
-        if escaped {
-            s_buf.push(c);
-            escaped = false;
-            continue;
-        } if in_literal_mode { // todo deconflate
-            if c == '$' && fmt == TextFormat::InlineMath {
-                push_fmted_text(&mut s_buf, &mut texts, &mut fmt, TextFormat::Plain);
-                in_literal_mode = false;
-            } else if c == '`' && fmt == TextFormat::InlineCode {
-                push_fmted_text(&mut s_buf, &mut texts, &mut fmt, TextFormat::Plain);
-                in_literal_mode = false;
-            } else {
-                s_buf.push(c);
-            }
-            continue;
-        }
-        match c { 
-            '\\' => { escaped = true; }
-            '*' => { push_fmted_text(&mut s_buf, &mut texts, &mut fmt, TextFormat::Bold); }
-            '_' => { push_fmted_text(&mut s_buf, &mut texts, &mut fmt, TextFormat::Italic); }
-            '$' => {
-                push_fmted_text(&mut s_buf, &mut texts, &mut fmt, TextFormat::InlineMath);
-                in_literal_mode = !in_literal_mode;
-            }
-            '`' => {
-                push_fmted_text(&mut s_buf, &mut texts, &mut fmt, TextFormat::InlineCode);
-                in_literal_mode = !in_literal_mode;
-            }
-            _ => { s_buf.push(c); }
-        }
-    }
-    let f2 = fmt.clone();
-    push_fmted_text(&mut s_buf, &mut texts, &mut fmt, f2);
-    // texts.push(Text{src: s_buf, fmt: fmt.clone()});
-    texts
+/* ========================================
+                    rendering
+   ======================================== */
+fn render_document(blocks: Vec<Block>, cfg: &CompilerConfig) -> String {
+    blocks.iter().map(|block| block.render(cfg)).collect()
 }
 
-
-fn parse_inner(block: Block) -> Block {
-    match block {
-        Block::Paragraph(ts) => {
-            // assume its raw in this pass
-            if let Some(raw_text) = ts.first() {
-                Block::Paragraph(parse_text(raw_text.src.clone()))
-            } else {
-                Block::Paragraph(ts)
+impl Text {
+    fn render(&self, cfg: &CompilerConfig) -> String {
+        match self.fmt {
+            TextFormat::Plain => {
+                String::clone(&self.src)
             }
-        },
-        Block::Footnote(id, ts) => {
-            if let Some(raw_text) = ts.first() {
-                Block::Footnote(id, parse_text(raw_text.src.clone()))
-            } else {
-                Block::Footnote(id, ts)
+            TextFormat::Bold => {
+                let s = String::clone(&self.src);
+                return format!("<span class=\"bold\"> {} </span>", s);
+            }
+            TextFormat::Italic => {
+                let s = String::clone(&self.src);
+                return format!("<span class=\"italic\"> {} </span>", s);
+            }
+            TextFormat::InlineMath => {
+                let svg = render_math_to_svg(&self.src, cfg, false).unwrap_or_else(
+                    |e| format!("<code class='latex-error'>{}</code>", e)
+                );
+                format!("<span class=\"inline-math\">{}</span>", svg)
+            }
+            TextFormat::InlineCode => {
+                format!(" <span class=\"inline-code\">{}</span>", &self.src)
+            }
+            TextFormat::Link(ref url) => {
+                format!("<a href=\"{}\">{}</a>", url, &self.src)
+            }
+            TextFormat::FootnoteRef => {
+                format!(
+                    "<sup id=\"ref{}\"><a href=\"#fn{}\">[{}]</a></sup>", 
+                    &self.src, &self.src, &self.src
+                )
+            }
+            _ => {
+                return String::clone(&self.src);
             }
         }
-        _ => block 
     }
 }
 
-fn parse(input: String) -> Vec<Block> {
-    let blocks = parse_blocks(input);
-    let content = blocks.into_iter().map(|b| parse_inner(b)).collect();
-    content
+impl Block {
+    fn render(&self, cfg: &CompilerConfig) -> String {
+        match self {
+            Block::Paragraph(chunks) => {
+                let c = chunks.iter().map(|text| text.render(cfg)).collect::<String>();
+                format!("<p>{}</p>\n", c)
+            },
+            Block::Header(level, src) => {
+                let tag = if *level == 1 { "h1" } else {"h2"};
+                let mut s = format!("<{}>{}</{}>\n", tag, src, tag);
+                if tag == "h1" {
+                    s.push_str("<hr><br>")
+                }
+                s
+            }
+            Block::Math(s) => {
+                let svg = render_math_to_svg(s, cfg, false).unwrap_or_else(
+                    |e| format!("<code class='latex-error'>{}</code>", e)
+                );
+                format!("<span class=\"display-math\">{}</span>", svg)
+            }
+            Block::Code(lang, src) => {
+                format!("<pre><code class=\"code-{}\">{}</code></pre>", lang, src)
+            }
+            Block::Image(alt, url, width) => {
+                let full_path = cfg.images_dir.join(url);
+                let path_str = full_path.to_str().unwrap();
+                if *width == 100 {
+                    format!("<img src=\"{}\" alt=\"{}\" class=\"image\">", path_str, alt)
+                } else {
+                    format!("<img src=\"{}\" alt=\"{}\" class=\"image\" style=\"width: {}%;\">", path_str, alt, width)
+                }
+            }
+            Block::Html(src) => {
+                src.to_string()
+            }
+            Block::Quote(src) => {
+                format!("<p class=quote>{}</p>\n", src)
+            }
+            Block::Footnote(id, chunks) => {
+                let c = chunks.iter().map(|text| text.render(cfg)).collect::<String>();
+                format!(
+                    "<p id=\"fn{}\"><a href=\"#ref{}\">[{}]</a> {}</p>",
+                    id, id, id, c
+                )
+            }
+            Block::List(is_ordered, list) => {
+                let mut s = String::new();
+                let mut current_level = 0;
+                let tag = if *is_ordered { "ol" } else { "ul" };
+                
+                // Start first list
+                s.push_str(&format!("<{}>", tag));
+                
+                for (i, item) in list.iter().enumerate() {
+                    let inner_text = item.content.iter().map(|t| t.render(cfg)).collect::<String>();
+                    
+                    // Handle level changes
+                    if item.level > current_level {
+                        // Open nested lists (don't close the previous <li> yet)
+                        for _ in current_level..item.level {
+                            s.push_str(&format!("<{}>", tag));
+                        }
+                    } else if item.level < current_level {
+                        // Close nested lists and previous <li>
+                        s.push_str("</li>");
+                        for _ in item.level..current_level {
+                            s.push_str(&format!("</{}>", tag));
+                            s.push_str("</li>");
+                        }
+                    } else if i > 0 {
+                        // Same level, close previous <li>
+                        s.push_str("</li>");
+                    }
+                    
+                    // Add current item
+                    s.push_str(&format!("<li>{}", inner_text));
+                    current_level = item.level;
+                }
+                
+                // Close remaining tags
+                s.push_str("</li>");
+                for _ in 0..current_level {
+                    s.push_str(&format!("</{}>", tag));
+                    s.push_str("</li>");
+                }
+                s.push_str(&format!("</{}>", tag));
+                
+                s
+            }
+        }
+    }
 }
-
-
-fn compile_post(in_path: &Path,
-                out_path: &Path,
-                cfg: &CompilerConfig,
-) {
-    println!("compiling: {} => {}", in_path.display(), out_path.display());
-
-    // read file
-    let file = std::fs::read_to_string(in_path).unwrap();
-
-    // parse
-    let parsed = parse(file);
-
-    // render contents
-    let content = render_document(parsed, cfg);
-    let _ = parsed;
-
-    // paste contents into template
-    let title = in_path.file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("untitled");
-    let post_html = cfg.post_template.clone()
-        .replace("{{content}}", &content)
-        .replace("{{title}}", title);
-
-    // write output to file
-    let _ = std::fs::write(out_path, post_html);
-}
-
 
 fn render_math_to_svg(math: &str, 
     cfg: &CompilerConfig, is_display: bool) -> Result<String, String> {
@@ -593,38 +631,5 @@ fn render_math_to_svg(math: &str,
     
     Ok(String::from_utf8_lossy(&svg_output.stdout).to_string())
 }
-
-
-fn main() {
-
-    let images_dir = Path::new("../static/images").to_path_buf();  // TODO: change when nginx
-    let post_template_path = Path::new("templates/template.html");
-    let math_template_path = Path::new("templates/math.tex");
-    let post_template = std::fs::read_to_string(post_template_path).unwrap();
-    let math_template = std::fs::read_to_string(math_template_path).unwrap();
-
-    let cfg = CompilerConfig {
-        images_dir,
-        post_template,
-        math_template
-    };
-
-    compile_post(
-        Path::new("posts/test_post.md"),
-        Path::new("www/test_post.html"),
-        &cfg
-    );
-
-    // let s = String::from("text [t1](u1) [t2](u2)");
-    // let link_regex = Regex::new(r"\[([^\]]+)\]\(([^)]+)\)").unwrap();
-    // let m = link_regex.find(&s);
-    // println!("{:?}", m);
-    
-    // println!("{:?}", render_math_to_svg("\\mathbb{R}^n", false));
-}
-
-
-
-
 
 
