@@ -15,7 +15,7 @@ here's something with a footnote[^1]
 [standalonelinktext](url2)
 
 \[
-\mathbb{C} \cong \frac{\mathbb{R}[t]}{(x^2 + 1)}
+\mathbb{C} \cong \frac{\mathbb{R}[t]}{(t^2 + 1)}
 \]
 
 ```python

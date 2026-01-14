@@ -1,3 +1,0 @@
-
-
-oakland is the best
