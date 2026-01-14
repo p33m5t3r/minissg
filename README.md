@@ -1,5 +1,5 @@
 
-custom markdown parser w/ svg latex support for static sites
+custom markdown parser/renderer w/ svg latex support for static sites
 
 ![example render](readme.png)
 
