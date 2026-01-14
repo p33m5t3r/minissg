@@ -1,6 +1,7 @@
 
-a testament to the tedium through which i will slog to achieve minor aesthetic wins
+custom markdown parser w/ svg latex support for static sites
 
+![example render](readme.png)
 
 ## usage
 
